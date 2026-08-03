@@ -62,8 +62,8 @@ multica-win/
 ├── server.exe              ← Go 后端 (windows/amd64)
 ├── migrate.exe             ← 迁移工具
 ├── multica.exe             ← CLI + daemon（agent 调度）
-└── client/                 ← Electron 客户端安装产物
-    └── Multica.exe 或 NSIS 安装包
+└── client/                 ← Electron 客户端便携目录（win-unpacked 内容）
+    └── Multica.exe          ← 启动器直接拉起（config.go 指向 client/Multica.exe）
 ```
 
 ## 构件来源与离线准备（在联网机器完成）
@@ -127,6 +127,19 @@ MULTICA_DEV_VERIFICATION_CODE=888888
 
 ## 构建步骤（在联网机器，Windows 或任意平台）
 
+### 方案 A：GitHub Actions 一键构建（推荐，免 Windows 机器）
+
+仓库已提供 `.github/workflows/windows-offline-build.yml`，在 `windows-latest` 上自动完成全部构建，产出可直接拷入离线 Windows 的 `multica-win/` 目录：
+
+- 在 fork 仓库 Actions 页 → **Run workflow**（`workflow_dispatch` 手动触发）；或 push 到 `main`/`master` 自动触发
+- 流水线自动：`pnpm install` → electron-builder `--win --x64 --dir` 出 `win-unpacked`（便携形态，非 NSIS）→ 交叉编译后端三件套 + 启动器 → 从 enterprisedb.com 下载便携 PG zip 并解压 → `scripts/pack-windows.sh` 组装 → 上传 artifact（保留 14 天）
+- 下载 artifact（zip），解压即得 `multica-win/`，拷入内网机器即可
+- 可配置项：workflow 输入框 `postgres_zip_url`（默认 EDB 官方 `postgresql-17.10-2-windows-x64-binaries.zip`），换版本时改这里即可
+
+**为什么 fork 上能跑**：该 workflow 不带 `github.repository_owner == 'multica-ai'` 守卫（对比 `release.yml` 的 desktop job），任何 fork 均可触发。
+
+### 方案 B：本机手动构建（任意平台交叉编译）
+
 ### 后端三件套（任意平台交叉编译）
 
 ```bash
@@ -147,9 +160,24 @@ pnpm package -- --win      # electron-builder 出 NSIS / portable 安装包
 ```
 产物：`multica-desktop-<version>-windows-x64.exe`。
 
+> 手动构建时推荐用 `pnpm package -- --win --x64 --dir` 直接产出 `dist/win-unpacked/` 便携目录（内含 `Multica.exe`），配合 `scripts/pack-windows.sh --client-dir=...` 组装，无需 NSIS 安装包。本机无 Windows 时改用方案 A。
+
 ### 组装目录
 
-将便携 PG zip、三个 EXE、Electron 安装包、启动器放入 `multica-win/`，拷入离线 Windows。
+用 `scripts/pack-windows.sh` 一步组装（比手工拷贝更可靠）：
+
+```bash
+# 任意平台（含 macOS/Linux）交叉编译后端三件套 + 启动器，并组装：
+bash scripts/pack-windows.sh \
+  --client-dir=/path/to/apps/desktop/dist/win-unpacked \   # Electron 便携目录（方案 A 的产物或本机构建）
+  --pg-dir=/path/to/postgresql-windows-x64/binaries         # 已解压的便携 PG（含 pgsql/bin）
+```
+选项：
+- `--client-dir=<dir>`：复用已构建的 `win-unpacked` 目录（默认在 Windows 上才本地构建客户端）
+- `--pg-zip=<zip>` 或 `--pg-dir=<dir>`：便携 PG 的 zip 或已解压目录
+- `--no-client`：跳过客户端（仅后端 + 启动器）
+
+产物在 `dist/multica-win/`，拷入离线 Windows 即可。
 
 ## 验证清单
 
@@ -161,7 +189,7 @@ pnpm package -- --win      # electron-builder 出 NSIS / portable 安装包
 
 ## 风险与后续事项
 
-- **Electron 构建需在 Windows 机器执行**（electron-builder 对 Windows 目标跨平台支持有限），这是离线准备阶段唯一"必须有 Windows"的步骤
+- ~~Electron 构建需在 Windows 机器执行~~：已由 `.github/workflows/windows-offline-build.yml` 自动化，fork 上触发即可产出全部构件，无需本地 Windows
 - 单机 `APP_ENV=development` 固定码仅限个人离线；若扩展多人需改走 SMTP 验证码
 - 若未来要多机访问，可把 server + PG 迁到内网服务器，客户端不变——架构天然支持
 - 文档不覆盖 `apps/web`（Next.js）；如未来要浏览器访问，需另行评估 Node 运行时方案

@@ -21,6 +21,12 @@
 #
 # Usage:
 #   bash scripts/pack-windows.sh [--no-client] [--pg-zip path/to/postgresql.zip]
+#   bash scripts/pack-windows.sh --client-dir path/to/win-unpacked [--pg-zip path] [--pg-dir path]
+#
+# --client-dir points at an already-built electron-builder `win-unpacked`
+# directory (e.g. apps/desktop/dist/win-unpacked) whose contents are copied
+# into client/. This is the portable form the launcher expects and lets the
+# pack run on a non-Windows host.
 #
 set -euo pipefail
 
@@ -30,12 +36,18 @@ OUT="$REPO_ROOT/dist/multica-win"
 
 NO_CLIENT=0
 PG_ZIP=""
-for arg in "$@"; do
-  case "$arg" in
+PG_DIR=""
+CLIENT_DIR=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --no-client) NO_CLIENT=1 ;;
-    --pg-zip=*) PG_ZIP="${arg#*=}" ;;
-    *) echo "Unknown arg: $arg" >&2; exit 1 ;;
+    --pg-zip=*) PG_ZIP="${1#*=}" ;;
+    --pg-dir=*) PG_DIR="${1#*=}" ;;
+    --client-dir=*) CLIENT_DIR="${1#*=}" ;;
+    --client-dir) shift; CLIENT_DIR="$1" ;;
+    *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
+  shift
 done
 
 echo "==> Packing Multica Windows distribution into $OUT"
@@ -66,7 +78,27 @@ echo "==> Cross-compiling launcher"
 # ---------------------------------------------------------------------------
 # 3. Portable PostgreSQL 17
 # ---------------------------------------------------------------------------
-if [ -n "$PG_ZIP" ]; then
+if [ -n "$PG_DIR" ]; then
+  echo "==> Copying portable PostgreSQL from $PG_DIR"
+  if [ ! -d "$PG_DIR" ]; then
+    echo "Error: --pg-dir does not exist or is not a directory: $PG_DIR" >&2
+    exit 1
+  fi
+  rm -rf "$OUT/postgres"
+  mkdir -p "$OUT/postgres"
+  # The zip contains a top-level pgsql/ dir; accept both the dir and the zip.
+  SRC="$PG_DIR"
+  if [ -d "$PG_DIR/pgsql" ]; then
+    SRC="$PG_DIR/pgsql"
+  fi
+  if [ ! -d "$SRC/bin" ]; then
+    echo "Error: no bin/ under $PG_DIR (expected pgsql/bin or bin)." >&2
+    exit 1
+  fi
+  shopt -s dotglob
+  cp -R "$SRC"/* "$OUT/postgres/"
+  shopt -u dotglob
+elif [ -n "$PG_ZIP" ]; then
   echo "==> Extracting portable PostgreSQL from $PG_ZIP"
   rm -rf "$OUT/postgres"
   mkdir -p "$OUT/postgres"
@@ -79,16 +111,30 @@ if [ -n "$PG_ZIP" ]; then
     shopt -u dotglob
   fi
 else
-  echo "==> Portable PostgreSQL zip not provided (--pg-zip=...)."
+  echo "==> Portable PostgreSQL not provided (--pg-zip=... or --pg-dir=...)."
   echo "    Place the official postgresql-<ver>-windows-x64-binaries.zip at:"
   echo "      $OUT/postgres/  (extracted)"
   echo "    Skipping for now."
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Electron client (needs a Windows build host)
+# 4. Electron client
 # ---------------------------------------------------------------------------
-if [ "$NO_CLIENT" -eq 1 ]; then
+if [ -n "$CLIENT_DIR" ]; then
+  echo "==> Copying Electron client from --client-dir=$CLIENT_DIR"
+  if [ ! -d "$CLIENT_DIR" ]; then
+    echo "Error: --client-dir does not exist or is not a directory: $CLIENT_DIR" >&2
+    exit 1
+  fi
+  if [ ! -f "$CLIENT_DIR/Multica.exe" ]; then
+    echo "Error: $CLIENT_DIR has no Multica.exe (not an electron-builder win-unpacked dir?)" >&2
+    exit 1
+  fi
+  rm -rf "$OUT/client"
+  mkdir -p "$OUT/client"
+  cp -R "$CLIENT_DIR"/. "$OUT/client/"
+  echo "==> Client copied (Multica.exe present: $([ -f "$OUT/client/Multica.exe" ] && echo yes || echo no))"
+elif [ "$NO_CLIENT" -eq 1 ]; then
   echo "==> Skipping Electron client (--no-client)"
 elif [ "$(uname -s)" = "MINGW"* ] || [ "$(uname -s)" = "MSYS"* ] || [ "$(uname -s)" = "CYGWIN"* ]; then
   echo "==> Building Electron client on Windows host"
@@ -103,7 +149,8 @@ elif [ "$(uname -s)" = "MINGW"* ] || [ "$(uname -s)" = "MSYS"* ] || [ "$(uname -
   find "$REPO_ROOT/apps/desktop/dist" -maxdepth 1 \( -iname "*.exe" -o -iname "*.msi" \) -exec cp {} "$OUT/client/" \;
 else
   echo "==> Electron client requires a Windows host to build (electron-builder)."
-  echo "    Build it separately and copy the .exe into: $OUT/client/"
+  echo "    Build it separately and pass --client-dir path/to/win-unpacked, or"
+  echo "    copy the .exe into: $OUT/client/"
 fi
 
 # ---------------------------------------------------------------------------

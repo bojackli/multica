@@ -1,0 +1,103 @@
+name: Windows Offline Build
+
+# Builds the complete "double-click to run" Windows offline distribution
+# (portable PostgreSQL + backend + launcher + Electron client) and uploads
+# it as an artifact. Unlike release.yml's desktop job, this workflow has no
+# repository-owner guard, so it runs on forks too.
+#
+# The result dist/multica-win is self-contained and requires no Docker / VM
+# / WSL / internet on the target machine.
+#
+# Triggers:
+#   - workflow_dispatch: manual "Run workflow" from the Actions tab
+#   - push to main (or master) on any fork
+
+on:
+  workflow_dispatch:
+    inputs:
+      postgres_zip_url:
+        description: "URL of the portable PostgreSQL Windows x64 binaries zip (enterprisedb.com)"
+        required: false
+        default: "https://get.enterprisedb.com/postgresql/postgresql-17.10-2-windows-x64-binaries.zip"
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Build only the win-unpacked dir (--dir) — the portable client/ form
+      # the launcher expects (client/Multica.exe). Skips the NSIS installer.
+      - name: Package Electron client (win-unpacked)
+        working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: node scripts/package.mjs --win --x64 --dir --publish never
+
+      - name: Download portable PostgreSQL
+        shell: bash
+        run: |
+          url="${{ inputs.postgres_zip_url || 'https://get.enterprisedb.com/postgresql/postgresql-17.10-2-windows-x64-binaries.zip' }}"
+          echo "Downloading $url"
+          curl -fL --retry 3 -o "$RUNNER_TEMP/postgresql.zip" "$url"
+          ls -lh "$RUNNER_TEMP/postgresql.zip"
+
+      # Git Bash unzip is unreliable on windows-latest; use PowerShell's
+      # Expand-Archive which is always present.
+      - name: Extract portable PostgreSQL
+        shell: pwsh
+        run: |
+          Expand-Archive -Path "$env:RUNNER_TEMP\postgresql.zip" -DestinationPath "$env:RUNNER_TEMP\postgres" -Force
+          Get-ChildItem "$env:RUNNER_TEMP\postgres"
+
+      - name: Assemble offline distribution
+        shell: bash
+        run: |
+          bash scripts/pack-windows.sh \
+            --client-dir="$PWD/apps/desktop/dist/win-unpacked" \
+            --pg-dir="$(cygpath -u "$RUNNER_TEMP/postgres")"
+
+      - name: Smoke-check distribution layout
+        shell: bash
+        run: |
+          cd dist/multica-win
+          for f in StartMultica.exe StopMultica.exe server.exe migrate.exe multica.exe client/Multica.exe postgres/bin/initdb.exe; do
+            [ -e "$f" ] && echo "OK  $f" || { echo "MISSING $f"; exit 1; }
+          done
+          du -sh .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: multica-win-offline
+          path: dist/multica-win
+          if-no-files-found: error
+          retention-days: 14
