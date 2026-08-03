@@ -47,6 +47,12 @@ server/migrate
 server/daemon
 server/multica
 
+# Windows launcher build outputs
+tools/windows-launcher/StartMultica.exe
+tools/windows-launcher/StopMultica.exe
+tools/windows-launcher/windows-launcher
+tools/windows-launcher/multica-launcher
+
 # Test artifacts
 test-results/
 apps/web/test-results/

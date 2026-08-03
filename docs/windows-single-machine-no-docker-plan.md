@@ -86,8 +86,9 @@ multica-win/
 4. 以 `DATABASE_URL=postgres://multica:multica@127.0.0.1:5433/multica?sslmode=disable` 运行 `migrate.exe up`
 5. 以同一 `DATABASE_URL` 启动 `server.exe`（监听 8080）
 6. 等待 `/health` 就绪
-7. 启动 Electron 客户端 `Multica.exe`
-8. 常驻等待；收到 `StopMultica.exe` / 用户关闭时，按序停止 client → server → PG
+7. 写 `~/.multica/desktop.json` 指向本机后端
+8. 启动 Electron 客户端 `Multica.exe`
+9. 常驻等待；收到 `StopMultica.exe` / 用户关闭时，按序停止 client → server → PG
 
 > **关键细节**：`DATABASE_URL` 使用 `127.0.0.1:5433` 而非 `localhost`。`scripts/ensure-postgres.sh` 对 localhost 强制 Docker 分支，用 127.0.0.1 可天然避开（且本方案不调用该脚本，启动器自管 PG）。
 
@@ -98,6 +99,16 @@ multica-win/
 3. `multica config set app_url http://127.0.0.1:3000`（Electron 客户端以 8080 为准，此项仅作一致性）
 4. `multica login`（单机可配置固定验证码，见下）
 5. `multica daemon start`
+
+> **Electron 客户端指向本机后端的关键机制**：打包版客户端（非 dev）从 `~/.multica/desktop.json` 读取后端地址（`apps/desktop/src/main/runtime-config-loader.ts`），缺失时回退到 Multica Cloud 默认地址。启动器会自动写入该文件指向 `http://127.0.0.1:8080`，因此**无需重新构建客户端**。文件格式：
+> ```json
+> {
+>   "schemaVersion": 1,
+>   "apiUrl": "http://127.0.0.1:8080",
+>   "wsUrl": "ws://127.0.0.1:8080/ws",
+>   "appUrl": "http://127.0.0.1:8080"
+> }
+> ```
 
 ### 3. 登录验证码（离线无邮件）
 
