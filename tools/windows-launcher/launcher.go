@@ -23,7 +23,7 @@ func start(c *Config, log *logger) error {
 	if _, err := os.Stat(c.MigrateExe); err != nil {
 		return fmt.Errorf("migrate tool not found at %s", c.MigrateExe)
 	}
-	if _, err := os.Stat(filepath.Join(c.PGBin, "pg_ctl")); err != nil {
+	if _, err := os.Stat(c.pgTool("pg_ctl")); err != nil {
 		return fmt.Errorf("portable PostgreSQL not found in %s", c.PGBin)
 	}
 
