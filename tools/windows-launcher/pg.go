@@ -84,9 +84,21 @@ func (c *Config) startPG(log *logger) error {
 		"-o", fmt.Sprintf("-p %d -h 127.0.0.1", c.PGPort),
 	}
 	cmd := exec.Command(c.pgTool("pg_ctl"), args...)
-	out, err := cmd.CombinedOutput()
+	// Critical: do NOT capture pg_ctl's stdout/stderr via a pipe
+	// (CombinedOutput). pg_ctl spawns the long-lived postgres process which
+	// inherits those pipe handles; Go's CombinedOutput blocks waiting for
+	// EOF on the pipe, which never comes while postgres runs — so the
+	// launcher hangs even though PostgreSQL starts fine. Redirect to a file
+	// instead; the inherited file handle doesn't block cmd.Run().
+	ctlLog, err := os.OpenFile(c.PGLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return fmt.Errorf("pg_ctl start failed: %w\n%s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("open pg_ctl log: %w", err)
+	}
+	defer ctlLog.Close()
+	cmd.Stdout = ctlLog
+	cmd.Stderr = ctlLog
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("pg_ctl start failed: %w", err)
 	}
 
 	if err := c.waitForPort("127.0.0.1", c.PGPort, 60*time.Second); err != nil {
