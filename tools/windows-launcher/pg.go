@@ -72,11 +72,17 @@ func (c *Config) startPG(log *logger) error {
 	}
 
 	log.Logf("Starting PostgreSQL on 127.0.0.1:%d", c.PGPort)
-	// Note: no "-w" here. On Windows pg_ctl -w probes the server via
-	// "localhost", which resolves to ::1, while the server only listens on
-	// 127.0.0.1 (IPv4) — so pg_ctl -w hangs forever waiting on a server it
-	// never sees as ready. We instead wait below with waitForPort, which
-	// dials 127.0.0.1 directly over IPv4.
+	// pg_ctl start with -l makes pg_ctl (and the postgres it spawns) write
+	// PGLog themselves. Do NOT also open PGLog here and redirect pg_ctl's
+	// stdout/stderr to it: that gives two handles on the same file, and on
+	// Windows the second open fails with "another program is using this
+	// file, the process cannot access it", killing the start. Let pg_ctl
+	// own PGLog exclusively.
+	//
+	// No "-w" either: pg_ctl -w probes via "localhost", which resolves to
+	// ::1 on Windows, while postgres only listens on 127.0.0.1 (IPv4), so
+	// it can hang. waitForPort below dials 127.0.0.1 directly and is the
+	// reliable readiness probe.
 	args := []string{
 		"start",
 		"-D", c.PGData,
@@ -84,19 +90,6 @@ func (c *Config) startPG(log *logger) error {
 		"-o", fmt.Sprintf("-p %d -h 127.0.0.1", c.PGPort),
 	}
 	cmd := exec.Command(c.pgTool("pg_ctl"), args...)
-	// Critical: do NOT capture pg_ctl's stdout/stderr via a pipe
-	// (CombinedOutput). pg_ctl spawns the long-lived postgres process which
-	// inherits those pipe handles; Go's CombinedOutput blocks waiting for
-	// EOF on the pipe, which never comes while postgres runs — so the
-	// launcher hangs even though PostgreSQL starts fine. Redirect to a file
-	// instead; the inherited file handle doesn't block cmd.Run().
-	ctlLog, err := os.OpenFile(c.PGLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open pg_ctl log: %w", err)
-	}
-	defer ctlLog.Close()
-	cmd.Stdout = ctlLog
-	cmd.Stderr = ctlLog
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("pg_ctl start failed: %w", err)
 	}
