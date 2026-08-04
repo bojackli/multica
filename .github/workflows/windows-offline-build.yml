@@ -101,3 +101,22 @@ jobs:
           path: dist/multica-win
           if-no-files-found: error
           retention-days: 14
+
+      # Small incremental-update artifact: just the two launcher exes. When the
+      # only change is the launcher, download this (~18MB) and overwrite the
+      # two files in an existing multica-win/ instead of re-downloading the
+      # full 650MB distribution.
+      - name: Stage launcher-only artifact
+        shell: bash
+        run: |
+          mkdir -p dist/launcher-only
+          cp dist/multica-win/StartMultica.exe dist/multica-win/StopMultica.exe dist/launcher-only/
+          ls -lh dist/launcher-only/
+
+      - name: Upload launcher artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: multica-launcher
+          path: dist/launcher-only
+          if-no-files-found: error
+          retention-days: 14
