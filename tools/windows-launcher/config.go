@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 )
@@ -93,6 +94,14 @@ func defaultConfig() (*Config, error) {
 		EnableAgent:  true,
 	}
 
+	// Pick a free port for PostgreSQL (starts at 5433) and the backend
+	// (starts at 8080). Third-party software on the host — antivirus,
+	// monitoring agents, other DBs — may already hold those ports, so scan
+	// upward for the first free one instead of failing hard.
+	c.PGPort = findFreePort(5433, 20)
+	c.ServerPort = findFreePort(8080, 20)
+	c.FrontendOrigin = fmt.Sprintf("http://127.0.0.1:%d", c.ServerPort)
+
 	c.DatabaseURL = fmt.Sprintf(
 		"postgres://%s:%s@127.0.0.1:%d/%s?sslmode=disable",
 		c.PGUser, c.PGPassword, c.PGPort, c.PGDatabase,
@@ -106,4 +115,20 @@ func defaultConfig() (*Config, error) {
 	}
 
 	return c, nil
+}
+
+// findFreePort scans upward from start for the first TCP port that can be
+// bound on 127.0.0.1, trying up to maxAttempts ports. It returns start if
+// nothing is found (so callers keep a sane default) — the bind below will
+// surface a real conflict at that point.
+func findFreePort(start, maxAttempts int) int {
+	for port := start; port < start+maxAttempts; port++ {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		_ = ln.Close()
+		return port
+	}
+	return start
 }
