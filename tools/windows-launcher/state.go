@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -51,20 +50,12 @@ func isProcessAlive(pid int) bool {
 		return false
 	}
 	if isWindows() {
-		// tasklist /FI "PID eq N" exits 0 when the process exists.
+		// tasklist /FI "PID eq N" exits 0 iff a process with that pid exists
+		// (and 1 when none match). The table output's first column is the
+		// image name, not the pid, so rely on the exit code rather than
+		// parsing columns.
 		cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid))
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return false
-		}
-		// A non-header line containing the pid means it is running.
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		for _, l := range lines {
-			if strings.HasPrefix(strings.TrimSpace(l), strconv.Itoa(pid)) {
-				return true
-			}
-		}
-		return false
+		return cmd.Run() == nil
 	}
 	// Unix: signal 0 probe.
 	cmd := exec.Command("kill", "-0", strconv.Itoa(pid))
