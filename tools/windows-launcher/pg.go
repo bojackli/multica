@@ -72,12 +72,16 @@ func (c *Config) startPG(log *logger) error {
 	}
 
 	log.Logf("Starting PostgreSQL on 127.0.0.1:%d", c.PGPort)
+	// Note: no "-w" here. On Windows pg_ctl -w probes the server via
+	// "localhost", which resolves to ::1, while the server only listens on
+	// 127.0.0.1 (IPv4) — so pg_ctl -w hangs forever waiting on a server it
+	// never sees as ready. We instead wait below with waitForPort, which
+	// dials 127.0.0.1 directly over IPv4.
 	args := []string{
 		"start",
 		"-D", c.PGData,
 		"-l", c.PGLog,
 		"-o", fmt.Sprintf("-p %d -h 127.0.0.1", c.PGPort),
-		"-w",
 	}
 	cmd := exec.Command(c.pgTool("pg_ctl"), args...)
 	out, err := cmd.CombinedOutput()
