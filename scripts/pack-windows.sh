@@ -154,7 +154,21 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. README
+# 5. Database migrations (migrate.exe resolves these relative to its own
+#    directory, so they must be present in the distribution).
+# ---------------------------------------------------------------------------
+echo "==> Copying database migrations"
+if [ -d "$REPO_ROOT/server/migrations" ]; then
+  mkdir -p "$OUT/migrations"
+  cp -R "$REPO_ROOT/server/migrations"/. "$OUT/migrations/"
+  echo "==> Migrations copied ($(ls "$OUT/migrations"/*.sql 2>/dev/null | wc -l | tr -d ' ') sql files)"
+else
+  echo "Error: server/migrations not found at $REPO_ROOT/server/migrations" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 6. README
 # ---------------------------------------------------------------------------
 cat > "$OUT/README.txt" <<'EOF'
 Multica — Windows single-machine, no-Docker distribution

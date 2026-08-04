@@ -89,7 +89,7 @@ jobs:
         shell: bash
         run: |
           cd dist/multica-win
-          for f in StartMultica.exe StopMultica.exe server.exe migrate.exe multica.exe client/Multica.exe postgres/bin/initdb.exe; do
+          for f in StartMultica.exe StopMultica.exe server.exe migrate.exe multica.exe client/Multica.exe postgres/bin/initdb.exe migrations/001_init.up.sql; do
             [ -e "$f" ] && echo "OK  $f" || { echo "MISSING $f"; exit 1; }
           done
           du -sh .
