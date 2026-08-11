@@ -211,8 +211,8 @@ func (c *Config) writeClientConfig(log *logger) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	cfg := map[string]string{
-		"schemaVersion": "1",
+	cfg := map[string]any{
+		"schemaVersion": 1,
 		"apiUrl":        "http://127.0.0.1:" + fmt.Sprint(c.ServerPort),
 		"wsUrl":         "ws://127.0.0.1:" + fmt.Sprint(c.ServerPort) + "/ws",
 		"appUrl":        c.FrontendOrigin,
