@@ -2850,7 +2850,15 @@ func (h *Handler) squadLeaderRoleOfAuthoringTask(ctx context.Context, issue db.I
 // that historical leader role is identified, a now-invalid squad or leader
 // fails closed instead of falling through to an unrelated assigned squad.
 func (h *Handler) routeGuestSquadLeaderFallback(ctx context.Context, issue db.Issue, parent *db.Comment, authorID string, opts commentTriggerComputeOptions) ([]commentAgentTrigger, bool) {
-	if parent == nil || !parent.ID.Valid || !opts.AuthoringTaskID.Valid {
+	if parent == nil || !parent.ID.Valid {
+		return nil, false
+	}
+	// A tombstone preserves only the reply tree; it can no longer authorize
+	// agent routing, including a fallthrough to the assigned squad (#8323).
+	if parent.DeletedAt.Valid {
+		return nil, true
+	}
+	if !opts.AuthoringTaskID.Valid {
 		return nil, false
 	}
 	workerTask, err := h.Queries.GetAgentTask(ctx, opts.AuthoringTaskID)

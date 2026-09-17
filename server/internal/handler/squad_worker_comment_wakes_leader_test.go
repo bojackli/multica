@@ -27,7 +27,7 @@ func TestCreateComment_GuestSquadWorkerCommentWakesLeader_GH8301(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	for _, leaderState := range []string{"completed", "dispatched"} {
+	for _, leaderState := range []string{"completed", "dispatched", "deleted_delegation"} {
 		t.Run(leaderState, func(t *testing.T) {
 			leaderRuntimeID := dbfx.Runtime(t, "GH-8301 guest leader runtime "+leaderState)
 			leaderID := dbfx.Agent(t, "GH-8301 guest leader "+leaderState, leaderRuntimeID)
@@ -80,7 +80,7 @@ func TestCreateComment_GuestSquadWorkerCommentWakesLeader_GH8301(t *testing.T) {
 			dbfx.Exec(t, `UPDATE agent_task_queue SET status = 'running' WHERE id = $1`, workerTaskID)
 
 			var dispatchedLeaderTaskID string
-			if leaderState == "dispatched" {
+			if leaderState != "completed" {
 				progress := post(workerID, workerTaskID, map[string]any{
 					"content":   "verification started",
 					"parent_id": delegation.ID,
@@ -100,13 +100,22 @@ func TestCreateComment_GuestSquadWorkerCommentWakesLeader_GH8301(t *testing.T) {
 				"parent_id": delegation.ID,
 			})
 
-			if leaderState == "dispatched" {
+			if leaderState != "completed" {
 				leaderTask, err := testHandler.Queries.GetAgentTask(context.Background(), parseUUID(dispatchedLeaderTaskID))
 				if err != nil {
 					t.Fatal(err)
 				}
 				if !slices.Contains(leaderTask.CoalescedCommentIds, parseUUID(reply.ID)) || slices.Contains(leaderTask.DeliveredCommentIds, parseUUID(reply.ID)) {
 					t.Fatal("dispatched guest leader did not record the worker reply as planned but undelivered")
+				}
+				if leaderState == "deleted_delegation" {
+					deleted, err := testHandler.deleteComment(context.Background(), parseUUID(delegation.ID), parseUUID(testWorkspaceID))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if deleted.Tombstone == nil {
+						t.Fatal("delegation with replies was removed instead of tombstoned")
+					}
 				}
 				if _, err := testHandler.TaskService.StartTask(context.Background(), parseUUID(dispatchedLeaderTaskID)); err != nil {
 					t.Fatal(err)
@@ -119,8 +128,12 @@ func TestCreateComment_GuestSquadWorkerCommentWakesLeader_GH8301(t *testing.T) {
 				WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'
 				  AND is_leader_task = TRUE AND squad_id = $3
 			`, issueID, leaderID, squadID)
-			if leaderTasks != 1 {
-				t.Fatalf("after guest worker comment: expected 1 queued leader task, got %d", leaderTasks)
+			wantLeaderTasks := 1
+			if leaderState == "deleted_delegation" {
+				wantLeaderTasks = 0
+			}
+			if leaderTasks != wantLeaderTasks {
+				t.Fatalf("after guest worker comment: expected %d queued leader task(s), got %d", wantLeaderTasks, leaderTasks)
 			}
 		})
 	}
