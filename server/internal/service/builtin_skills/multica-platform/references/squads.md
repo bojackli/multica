@@ -201,6 +201,9 @@ started before the reply arrived, the reply is delivered in a follow-up run
 after that run completes, so the worker does not need to mention the leader
 again.
 
+A deleted delegation no longer identifies a guest leader. An issue's assigned
+squad can still receive a worker reply through its independent assignment route.
+
 Squad mention format:
 
 ```md

@@ -2853,10 +2853,11 @@ func (h *Handler) routeGuestSquadLeaderFallback(ctx context.Context, issue db.Is
 	if parent == nil || !parent.ID.Valid {
 		return nil, false
 	}
-	// A tombstone preserves only the reply tree; it can no longer authorize
-	// agent routing, including a fallthrough to the assigned squad (#8323).
+	// A tombstone preserves only the reply tree, not the guest delegation's
+	// routing authority (#8323). The issue's assignment remains an independent
+	// source of authority for the assigned-squad fallback.
 	if parent.DeletedAt.Valid {
-		return nil, true
+		return nil, false
 	}
 	if !opts.AuthoringTaskID.Valid {
 		return nil, false

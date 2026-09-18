@@ -139,13 +139,14 @@ func TestCreateComment_GuestSquadWorkerCommentWakesLeader_GH8301(t *testing.T) {
 	}
 }
 
-// A worker task delegated by guest squad B must not wake the assigned squad A,
-// even when B's historical leader role is no longer valid.
+// A live delegation from guest squad B takes precedence over assigned squad A,
+// even when B's historical leader role is no longer valid. A tombstone removes
+// the guest delegation's authority while preserving the independent assignment.
 func TestCreateComment_GuestSquadRouteWinsAssignedSquadFallback_GH8301(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	for _, mode := range []string{"valid", "archived_squad", "leader_changed", "permission_denied"} {
+	for _, mode := range []string{"valid", "archived_squad", "leader_changed", "permission_denied", "deleted_delegation"} {
 		t.Run(mode, func(t *testing.T) {
 			outsiderID := dbfx.User(t, "GH-8301 outsider "+mode, "gh-8301-"+mode+"@multica.test")
 			assignedLeaderID := dbfx.Agent(t, "GH-8301 assigned leader "+mode, testRuntimeID)
@@ -192,6 +193,15 @@ func TestCreateComment_GuestSquadRouteWinsAssignedSquadFallback_GH8301(t *testin
 				dbfx.Exec(t, `UPDATE squad SET leader_id = $2 WHERE id = $1`, guestSquadID, replacementID)
 			case "permission_denied":
 				dbfx.Exec(t, `UPDATE agent SET owner_id = $2 WHERE id = $1`, guestLeaderID, outsiderID)
+			case "deleted_delegation":
+				dbfx.Comment(t, issueID, "keep delegation reply tree", testutil.Cols{"parent_id": delegationID})
+				deleted, err := testHandler.deleteComment(context.Background(), parseUUID(delegationID), parseUUID(testWorkspaceID))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if deleted.Tombstone == nil {
+					t.Fatal("delegation with replies was removed instead of tombstoned")
+				}
 			}
 
 			r := newRequest(http.MethodPost, "/api/issues/"+issueID+"/comments", map[string]any{
@@ -203,8 +213,12 @@ func TestCreateComment_GuestSquadRouteWinsAssignedSquadFallback_GH8301(t *testin
 			r = withURLParam(r, "id", issueID)
 			testutil.Call(t, testHandler.CreateComment, r).Want(http.StatusCreated)
 
-			if got := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`, issueID, assignedLeaderID); got != 0 {
-				t.Fatalf("assigned squad leader received %d task(s), want 0", got)
+			wantAssigned := 0
+			if mode == "deleted_delegation" {
+				wantAssigned = 1
+			}
+			if got := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued' AND is_leader_task = TRUE AND squad_id = $3`, issueID, assignedLeaderID, assignedSquadID); got != wantAssigned {
+				t.Fatalf("assigned squad leader received %d task(s), want %d", got, wantAssigned)
 			}
 			wantGuest := 0
 			if mode == "valid" {
@@ -212,6 +226,58 @@ func TestCreateComment_GuestSquadRouteWinsAssignedSquadFallback_GH8301(t *testin
 			}
 			if got := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued' AND is_leader_task = TRUE AND squad_id = $3`, issueID, guestLeaderID, guestSquadID); got != wantGuest {
 				t.Fatalf("exact guest squad leader received %d task(s), want %d", got, wantGuest)
+			}
+		})
+	}
+}
+
+// Deleting a parent removes its author-routing authority, but does not revoke
+// the issue's squad assignment or suppress an ordinary worker result.
+func TestCreateComment_WorkerReplyToTombstoneWakesAssignedSquad_GH8301(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	for _, authorType := range []string{"agent", "member"} {
+		t.Run(authorType, func(t *testing.T) {
+			leaderID := dbfx.Agent(t, "GH-8301 tombstone assigned leader "+authorType, testRuntimeID)
+			workerID := dbfx.Agent(t, "GH-8301 tombstone worker "+authorType, testRuntimeID)
+			squadID := dbfx.Squad(t, "GH-8301 tombstone squad "+authorType, leaderID)
+			issueID := dbfx.Issue(t, "assigned worker reply to tombstone "+authorType, testutil.Cols{
+				"assignee_type": "squad", "assignee_id": squadID,
+			})
+			parentCols := testutil.Cols{}
+			if authorType == "agent" {
+				leaderTaskID := dbfx.Task(t, leaderID, testutil.Cols{
+					"runtime_id": testRuntimeID, "issue_id": issueID, "status": "completed",
+					"is_leader_task": true, "squad_id": squadID,
+					"originator_user_id": testUserID, "accountable_user_id": testUserID,
+				})
+				parentCols = testutil.Cols{"author_type": "agent", "author_id": leaderID, "source_task_id": leaderTaskID}
+			}
+			parentID := dbfx.Comment(t, issueID, "please handle", parentCols)
+			dbfx.Comment(t, issueID, "keep reply tree", testutil.Cols{"parent_id": parentID})
+			workerTaskID := dbfx.Task(t, workerID, testutil.Cols{
+				"runtime_id": testRuntimeID, "issue_id": issueID, "status": "running",
+				"trigger_comment_id": parentID, "originator_user_id": testUserID, "accountable_user_id": testUserID,
+			})
+			dbfx.Cleanup(t, `DELETE FROM comment WHERE issue_id = $1`, issueID)
+			dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+			deleted, err := testHandler.deleteComment(context.Background(), parseUUID(parentID), parseUUID(testWorkspaceID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if deleted.Tombstone == nil {
+				t.Fatal("parent with replies was removed instead of tombstoned")
+			}
+
+			r := newRequest(http.MethodPost, "/api/issues/"+issueID+"/comments", map[string]any{
+				"content": "work complete", "parent_id": parentID,
+			})
+			r.Header.Set("X-Agent-ID", workerID)
+			r.Header.Set("X-Task-ID", workerTaskID)
+			testutil.Call(t, testHandler.CreateComment, withURLParam(r, "id", issueID)).Want(http.StatusCreated)
+			if got := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued' AND is_leader_task = TRUE AND squad_id = $3`, issueID, leaderID, squadID); got != 1 {
+				t.Fatalf("assigned squad leader received %d task(s) after worker reply to %s tombstone, want 1", got, authorType)
 			}
 		})
 	}
