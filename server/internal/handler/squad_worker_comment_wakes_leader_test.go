@@ -21,6 +21,46 @@ func TestGuestSquadWorkerReplayRequiresPlannedInput_GH8301(t *testing.T) {
 	}
 }
 
+func TestGuestSquadWorkerRouteOnMemberAssignedIssue_GH8301(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	fx := newSquadCommentTriggerFixture(t)
+	issueID := uuidToString(fx.Issue.ID)
+	dbfx.Exec(t, `UPDATE issue SET assignee_type = 'member', assignee_id = $2 WHERE id = $1`, issueID, testUserID)
+	fx.Issue.AssigneeType = pgtype.Text{String: "member", Valid: true}
+	fx.Issue.AssigneeID = parseUUID(testUserID)
+
+	leaderTaskID := dbfx.Task(t, fx.LeaderID, testutil.Cols{
+		"runtime_id": testRuntimeID, "issue_id": issueID, "status": "completed",
+		"is_leader_task": true, "squad_id": fx.SquadID,
+		"originator_user_id": testUserID, "accountable_user_id": testUserID,
+	})
+	delegationID := dbfx.Comment(t, issueID, "delegate to guest worker", testutil.Cols{
+		"author_type": "agent", "author_id": fx.LeaderID, "source_task_id": leaderTaskID,
+	})
+	workerTaskID := dbfx.Task(t, fx.OtherID, testutil.Cols{
+		"runtime_id": testRuntimeID, "issue_id": issueID, "status": "running",
+		"trigger_comment_id": delegationID, "squad_id": fx.SquadID,
+		"delegated_from_task_id": leaderTaskID,
+		"originator_user_id":     testUserID, "accountable_user_id": testUserID,
+	})
+	parent, err := testHandler.Queries.GetComment(ctx, parseUUID(delegationID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	triggers, _ := testHandler.computeCommentAgentTriggers(ctx, fx.Issue, "done", &parent, "agent", fx.OtherID, commentTriggerComputeOptions{
+		AuthoringTaskID: parseUUID(workerTaskID), OriginatorUserID: testUserID,
+	})
+	if len(triggers) != 1 || triggers[0].Source != commentTriggerSourceThreadParent || triggers[0].Squad == nil {
+		t.Fatalf("guest worker route = %+v, want one squad leader thread-parent trigger", triggers)
+	}
+	if got := keepReplayableAgentTriggers(triggers, true); len(got) != 1 {
+		t.Fatal("planned guest worker reply must replay")
+	}
+}
+
 func TestCreateComment_GuestSquadWorkerRouting_GH8301(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
